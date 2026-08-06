@@ -1,0 +1,21 @@
+[project]
+name = "fiat"
+version = "0.1.0"
+description = "Minimalist workflow orchestration"
+readme = "README.md"
+authors = [{ name = "Scott Olesen", email = "ulp7@cdc.gov" }]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+fiat = "fiat:main"
+
+[project.optional-dependencies]
+polars = ["polars>=1.43.2"]
+
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pytest>=9.1.1"]
