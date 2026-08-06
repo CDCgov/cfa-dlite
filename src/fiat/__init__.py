@@ -5,6 +5,7 @@ import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 type ID = str
 
@@ -16,65 +17,87 @@ except ImportError:
     HAS_POLARS = False
 
 
+@dataclasses.dataclass
+class Asset:
+    id: str
+    store: Store
+    fun: Callable
+    deps: list[str]
+
+    def materialize(self):
+        outcome = self.store.read()
+        if outcome.exists:
+            obj = outcome.obj
+        else:
+            obj = self.fun()
+            self.store.write(obj)
+
+        return obj
+
+
+@dataclasses.dataclass
+class _StoreOutcome:
+    exists: bool
+    obj: Any = None
+
+
 class Store(ABC):
     @abstractmethod
-    def exists(self, asset: Asset) -> bool:
+    def read(self) -> _StoreOutcome:
         pass
 
     @abstractmethod
-    def read(self, asset: Asset):
+    def write(self, obj):
         pass
 
-    @abstractmethod
-    def write(self, asset: Asset, obj):
+
+class NullStore(Store):
+    def read(self):
+        return _StoreOutcome(exists=False)
+
+    def write(self, _):
         pass
 
 
 class MemoryStore(Store):
     def __init__(self):
-        self.assets: dict[ID, Asset] = {}
+        self.exists = False
+        self.obj = None
 
-    def exists(self, asset: Asset) -> bool:
-        return asset.id in self.assets
+    def read(self):
+        return _StoreOutcome(exists=self.exists, obj=self.obj)
 
-    def read(self, asset: Asset):
-        return self.assets[asset.id]
-
-    def write(self, asset: Asset, obj):
-        self.assets[asset.id] = obj
+    def write(self, obj):
+        self.exists = True
+        self.obj = obj
 
 
-class FileStore(Store, ABC):
-    def __init__(self, dir: str | Path):
-        self.dir = Path(dir)
-        assert self.dir.is_dir()
+class FileStore(Store):
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+
+    def read(self):
+        if self.path.exists():
+            exists = True
+            obj = self._read_file()
+        else:
+            exists = False
+            obj = None
+
+        return _StoreOutcome(exists=exists, obj=obj)
 
     @abstractmethod
-    def artifact_path(self, asset: Asset) -> Path:
-        raise NotImplementedError()
-
-    def exists(self, asset: Asset) -> bool:
-        return self.artifact_path(asset).exists()
-
-    def pickle_store(self) -> PickleStore:
-        return PickleStore(dir=self.dir)
-
-    def parquet_store(self) -> ParquetStore:
-        return ParquetStore(dir=self.dir)
+    def _read_file(self):
+        pass
 
 
 class PickleStore(FileStore):
-    def artifact_path(self, asset: Asset) -> Path:
-        return self.dir / f"{asset.id}.pkl"
-
-    def read(self, asset: Asset):
-        path = self.artifact_path(asset)
-        with open(path, "rb") as f:
+    def _read_file(self):
+        with open(self.path, "rb") as f:
             return pickle.load(f)
 
-    def write(self, asset: Asset, obj):
-        path = self.artifact_path(asset)
-        with open(path, "wb") as f:
+    def write(self, obj):
+        with open(self.path, "wb") as f:
             pickle.dump(obj, f)
 
 
@@ -83,81 +106,46 @@ class ParquetStore(FileStore):
         if not HAS_POLARS:
             raise ImportError("fiat[polars] is required for ParquetStore")
 
-    def artifact_path(self, asset: Asset) -> Path:
-        return self.dir / f"{asset.id}.parquet"
+    def _read_file(self):
+        return pl.read_parquet(self.path)
 
-    def read(self, asset: Asset) -> pl.DataFrame:
-        path = self.artifact_path(asset)
-        return pl.read_parquet(path)
-
-    def write(self, asset: Asset, obj: pl.DataFrame):
+    def write(self, obj: pl.DataFrame):
         if not isinstance(obj, pl.DataFrame):
             raise ValueError(
                 f"Cannot write '{obj}' of type {type(obj)} to parquet store"
             )
-        path = self.artifact_path(asset)
-        obj.write_parquet(path)
+        obj.write_parquet(self.path)
 
 
 class Catalog:
     def __init__(self):
-        self.assets: list[Asset] = []
+        self.assets: dict[ID, Asset] = {}
 
-    def register(self, store: Store, fun: Callable, id: ID, deps: list[ID]):
-        self.assets.append(Asset(catalog=self, store=store, id=id, fun=fun, deps=deps))
+    def asset(
+        self,
+        store: Store,
+        deps: list[str] | None = None,
+        id: str | None = None,
+    ):
+        def decorator(fun: Callable):
+            """Register this asset"""
+            id_ = id or fun.__name__
+            deps_ = deps or []
+
+            if id_ in self.assets:
+                raise RuntimeError(f"Duplicated asset ID '{id}'")
+
+            asset = Asset(store=store, id=id_, fun=fun, deps=deps_)
+            self.assets[id_] = asset
+
+            def wrapper():
+                """Return the asset's materialized value"""
+                return self.materialize(id_)
+
+            return wrapper
+
+        return decorator
 
     def materialize(self, id: ID):
-        asset = self._get_asset_by_id(self.assets, id)
-        if asset.store.exists(asset):
-            obj = asset.store.read(asset)
-        else:
-            kwargs = {id: self.materialize(id) for id in asset.deps}
-            obj = asset.fun(**kwargs)
-            asset.store.write(asset, obj)
-
-        return obj
-
-    @staticmethod
-    def _get_asset_by_id(assets: list[Asset], id: ID):
-        matches = [x for x in assets if x.id == id]
-        match len(matches):
-            case 0:
-                raise RuntimeError(f"No asset with id '{id}")
-            case 1:
-                return matches[0]
-            case _:
-                raise RuntimeError(f"Multiple assets with id '{id}'")
-
-
-@dataclasses.dataclass
-class Asset:
-    catalog: Catalog
-    store: Store
-    id: str
-    fun: Callable
-    deps: list[str]
-
-
-def asset(
-    catalog: Catalog,
-    store: Store,
-    deps: list[str] | None = None,
-    id: str | None = None,
-):
-    def decorator(fun: Callable):
-        id_ = id or fun.__name__
-
-        # register this asset
-        catalog.register(
-            store=store,
-            id=id_,
-            fun=fun,
-            deps=deps or [],
-        )
-
-        def wrapper():
-            return catalog.materialize(id_)
-
-        return wrapper
-
-    return decorator
+        asset = self.assets[id]
+        return asset.materialize()

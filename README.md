@@ -2,21 +2,20 @@
 
 Minimal workflow orchestration.
 
-"Fiat" is Latin, the third person singular passive present subjunctive of *facio*, meaning "let it be done."
+"Fiat" is Latin, the third person singular passive present subjunctive of *facio*; that is, "let it be done."
 
 ## Overview
 
-fiat allows you to create *assets*, tracked in a *catalog*, each with an associated *store*.
+fiat allows you to create a *catalog* of *assets*, each with an associated *store*.
 The simplest store is memory, which implements a simple cache:
 
 ```python
-from fiat import Catalog, MemoryStore, asset
+from fiat import Catalog, MemoryStore
 
 catalog = Catalog()
-store = MemoryStore()
 
 
-@asset(catalog, store)
+@catalog.asset(MemoryStore())
 def my_expensive_function():
     print("this is slow!")
     return "return value"
@@ -32,47 +31,44 @@ print(my_expensive_function())
 fiat implements a greedy DAG: if one asset depends on another, it will cause those other assets to be materialized first:
 
 ```python
-from fiat import Catalog, MemoryStore, asset
+from fiat import Catalog, MemoryStore
 
 catalog = Catalog()
-store = MemoryStore()
 
 
-@asset(catalog, store)
+@catalog.asset(MemoryStore())
 def one():
     return 1
 
 
-@asset(catalog, store)
+@catalog.asset(MemoryStore())
 def two():
     return 2
 
 
-@asset(catalog, store, deps=["one", "two"])
+@catalog.asset(MemoryStore(), deps=["one", "two"])
 def three():
     return one() + two()
 ```
 
-Note that the explicit catalog object makes it clear which assets can depend on each other, and how they find each other.
-
 Use file stores like `PickleStore` and `ParquetStore` to create persistent artifacts:
 
 ```python
-from fiat import Catalog, FileStore, PickleStore, ParquetStore, asset
+from fiat import Catalog, ParquetStore, PickleStore
 import tempfile
 import polars as pl
+from pathlib import Path
 
-catalog = Catalog()
 # create a store from the directory name
 with tempfile.TemporaryDirectory() as td:
-    pickle_store = PickleStore(td)
-    parquet_store = ParquetStore(td)
+    td = Path(td)
+    catalog = Catalog()
 
-    @asset(catalog, pickle_store)
+    @catalog.asset(PickleStore(td / "my_object.pkl"))
     def my_object():
         return None
 
-    @asset(catalog, parquet_store)
+    @catalog.asset(ParquetStore(td / "my_dataframe.parquet"))
     def my_dataframe() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
@@ -80,6 +76,15 @@ with tempfile.TemporaryDirectory() as td:
     print(my_dataframe())
     # my_object.pkl and my_dataframe.parquet will appear in the td
 ```
+
+## Design principles
+
+- `fiat` doesn't require the workflow to be organized differently.
+  If you delete all the `fiat` lines, the code will still run.
+- The catalog creates a namespace orthogonal to the canonical namespace.
+  This enables the prior principle.
+- Every asset has a different store.
+  This way an upstream data source might be in the cloud, but downstream ones might be on disk.
 
 ## Future directions
 
@@ -91,6 +96,7 @@ with tempfile.TemporaryDirectory() as td:
        E.g., maybe I want new case data every day, but then all downstream files are `make`-type freshness.
 - Implement dependencies and the DAG
 - Cloud storage protocols
+- How to deal with wildcards
 
 ## Admins
 

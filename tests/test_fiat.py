@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from fiat import Catalog, MemoryStore, ParquetStore, PickleStore, asset
+from fiat import Catalog, MemoryStore, ParquetStore, PickleStore
 
 
 def test_memory_store():
@@ -9,7 +9,7 @@ def test_memory_store():
     store = MemoryStore()
     calls = 0
 
-    @asset(catalog, store)
+    @catalog.asset(store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -22,23 +22,21 @@ def test_memory_store():
     f()
     assert calls == 1
 
-    # peek inside the store
-    assert store.assets == {"f": "return value"}
-
 
 def test_pickle_store(tmp_path):
+    path = tmp_path / "f.pkl"
     catalog = Catalog()
-    store = PickleStore(tmp_path)
+    store = PickleStore(path)
     calls = 0
 
-    @asset(catalog, store)
+    @catalog.asset(store)
     def f() -> str:
         nonlocal calls
         calls += 1
         return "return value"
 
     assert f() == "return value"
-    assert (tmp_path / "f.pkl").exists()
+    assert (path).exists()
     assert calls == 1
 
     # should read from disk
@@ -48,17 +46,20 @@ def test_pickle_store(tmp_path):
 
 def test_parquet_store(tmp_path):
     catalog = Catalog()
-    store = ParquetStore(tmp_path)
 
-    @asset(catalog, store)
+    @catalog.asset(ParquetStore(tmp_path / "f.parquet"))
     def f() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
     obj = f()
     assert isinstance(obj, pl.DataFrame)
 
+
+def test_parquet_store_fail(tmp_path):
+    catalog = Catalog()
+
     # should fail if wrong data type
-    @asset(catalog, store)
+    @catalog.asset(ParquetStore(tmp_path / "g.parquet"))
     def g() -> str:
         return "strings can't go in parquets"
 
