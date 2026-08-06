@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import dataclasses
-import inspect
 import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+
+type ID = str
 
 try:
     import polars as pl
@@ -13,148 +15,148 @@ try:
 except ImportError:
     HAS_POLARS = False
 
-Formats = Literal["pickle", "parquet"]
 
-
-class AssetStorage(ABC):
+class Store(ABC):
     @abstractmethod
-    def exists(self, entry):
+    def exists(self, asset: Asset) -> bool:
         pass
 
     @abstractmethod
-    def read(self, entry):
+    def read(self, asset: Asset):
         pass
 
     @abstractmethod
-    def write(self, entry, asset):
+    def write(self, asset: Asset, obj):
         pass
 
 
-class MemoryStorage(AssetStorage):
+class MemoryStore(Store):
     def __init__(self):
-        self.assets = {}
+        self.assets: dict[ID, Asset] = {}
 
-    def exists(self, entry):
-        return entry.id in self.assets
+    def exists(self, asset: Asset) -> bool:
+        return asset.id in self.assets
 
-    def read(self, entry):
-        return self.assets[entry.id]
+    def read(self, asset: Asset):
+        return self.assets[asset.id]
 
-    def write(self, entry, asset):
-        self.assets[entry.id] = asset
-
-
-class FileStorage(AssetStorage):
-    def __init__(self, data_dir):
-        self.data_dir = Path(data_dir)
-
-    def path(self, entry):
-        ext = {"pickle": "pkl", "parquet": "parquet"}[entry.format]
-        return self.data_dir / f"{entry.id}.{ext}"
-
-    def exists(self, entry):
-        return self.path(entry).exists()
-
-    def read(self, entry):
-        path = self.path(entry)
-        match entry.format:
-            case "pickle":
-                with open(path, "rb") as f:
-                    return pickle.load(f)
-            case "parquet":
-                if HAS_POLARS:
-                    return pl.read_parquet(path)
-                raise ImportError("polars is required")
-            case _:
-                raise NotImplementedError(
-                    f"no read implementation for format '{entry.format}'"
-                )
-
-    def write(self, entry, asset):
-        path = self.path(entry)
-        match entry.format:
-            case "pickle":
-                with open(path, "wb") as f:
-                    pickle.dump(asset, f)
-            case "parquet":
-                if HAS_POLARS:
-                    assert isinstance(asset, pl.DataFrame)
-                    asset.write_parquet(path)
-                else:
-                    raise ImportError("polars is required")
-            case _:
-                raise NotImplementedError(
-                    f"no write implementation for format '{entry.format}'"
-                )
+    def write(self, asset: Asset, obj):
+        self.assets[asset.id] = obj
 
 
-class AssetRegistry:
-    def __init__(self, storage: AssetStorage):
-        self.storage = storage
-        self.entries: list[AssetEntry] = []
+class FileStore(Store, ABC):
+    def __init__(self, dir: str | Path):
+        self.dir = Path(dir)
+        assert self.dir.is_dir()
 
-    def register(self, entry):
-        self.entries.append(entry)
+    @abstractmethod
+    def artifact_path(self, asset: Asset) -> Path:
+        raise NotImplementedError()
 
-    def get(self, id: str):
-        matches = [x for x in self.entries if x.id == id]
+    def exists(self, asset: Asset) -> bool:
+        return self.artifact_path(asset).exists()
+
+    def pickle_store(self) -> PickleStore:
+        return PickleStore(dir=self.dir)
+
+    def parquet_store(self) -> ParquetStore:
+        return ParquetStore(dir=self.dir)
+
+
+class PickleStore(FileStore):
+    def artifact_path(self, asset: Asset) -> Path:
+        return self.dir / f"{asset.id}.pkl"
+
+    def read(self, asset: Asset):
+        path = self.artifact_path(asset)
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    def write(self, asset: Asset, obj):
+        path = self.artifact_path(asset)
+        with open(path, "wb") as f:
+            pickle.dump(obj, f)
+
+
+class ParquetStore(FileStore):
+    def __post_init__(self):
+        if not HAS_POLARS:
+            raise ImportError("fiat[polars] is required for ParquetStore")
+
+    def artifact_path(self, asset: Asset) -> Path:
+        return self.dir / f"{asset.id}.parquet"
+
+    def read(self, asset: Asset) -> pl.DataFrame:
+        path = self.artifact_path(asset)
+        return pl.read_parquet(path)
+
+    def write(self, asset: Asset, obj: pl.DataFrame):
+        if not isinstance(obj, pl.DataFrame):
+            raise ValueError(
+                f"Cannot write '{obj}' of type {type(obj)} to parquet store"
+            )
+        path = self.artifact_path(asset)
+        obj.write_parquet(path)
+
+
+class Catalog:
+    def __init__(self):
+        self.assets: list[Asset] = []
+
+    def register(self, store: Store, fun: Callable, id: ID, deps: list[ID]):
+        self.assets.append(Asset(catalog=self, store=store, id=id, fun=fun, deps=deps))
+
+    def materialize(self, id: ID):
+        asset = self._get_asset_by_id(self.assets, id)
+        if asset.store.exists(asset):
+            obj = asset.store.read(asset)
+        else:
+            kwargs = {id: self.materialize(id) for id in asset.deps}
+            obj = asset.fun(**kwargs)
+            asset.store.write(asset, obj)
+
+        return obj
+
+    @staticmethod
+    def _get_asset_by_id(assets: list[Asset], id: ID):
+        matches = [x for x in assets if x.id == id]
         match len(matches):
             case 0:
                 raise RuntimeError(f"No asset with id '{id}")
             case 1:
-                return matches[0].get()
+                return matches[0]
             case _:
                 raise RuntimeError(f"Multiple assets with id '{id}'")
 
 
 @dataclasses.dataclass
-class AssetEntry:
-    registry: AssetRegistry
+class Asset:
+    catalog: Catalog
+    store: Store
     id: str
     fun: Callable
     deps: list[str]
-    format: str
-
-    def __post_init__(self):
-        # validate signature
-        signature_parameters = set(inspect.signature(self.fun).parameters)
-        if signature_parameters != set(self.deps):
-            raise RuntimeError(
-                f"deps {self.deps} is not equal to parameters {signature_parameters}"
-            )
-
-    def get(self):
-        if self.registry.storage.exists(self):
-            return self.registry.storage.read(self)
-
-        kwargs = {id: self.registry.get(id) for id in self.deps}
-        asset = self.fun(**kwargs)
-        self.registry.storage.write(self, asset)
-        return asset
 
 
 def asset(
-    registry: AssetRegistry, deps: list[str] | None = None, format: Formats = "pickle"
+    catalog: Catalog,
+    store: Store,
+    deps: list[str] | None = None,
+    id: str | None = None,
 ):
-    if deps is None:
-        deps = []
-
     def decorator(fun: Callable):
-        # register this asset
-        id = fun.__name__
+        id_ = id or fun.__name__
 
-        registry.register(
-            AssetEntry(
-                registry=registry,
-                id=id,
-                fun=fun,
-                deps=deps,
-                format=format,
-            )
+        # register this asset
+        catalog.register(
+            store=store,
+            id=id_,
+            fun=fun,
+            deps=deps or [],
         )
 
         def wrapper():
-            return registry.get(id)
+            return catalog.materialize(id_)
 
         return wrapper
 

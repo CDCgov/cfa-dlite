@@ -1,74 +1,96 @@
 # fiat
 
 Minimal workflow orchestration.
-So let it be written, so let it be done.
+
+"Fiat" is Latin, the third person singular passive present subjunctive of *facio*, meaning "let it be done."
 
 ## Overview
 
-fiat allows you to create *assets*, tracked in a *registry*, with associated an associated *storage* protocol.
-The simplest storage is in memory, which reimplements a simple cache:
+fiat allows you to create *assets*, tracked in a *catalog*, each with an associated *store*.
+The simplest store is memory, which implements a simple cache:
 
 ```python
-from fiat import AssetRegistry, MemoryStorage, asset
+from fiat import Catalog, MemoryStore, asset
 
-storage = MemoryStorage()
-registry = AssetRegistry(storage)
+catalog = Catalog()
+store = MemoryStore()
 
 
-@asset(registry)
+@asset(catalog, store)
 def my_expensive_function():
     print("this is slow!")
-    return "hard to find"
+    return "return value"
 
 
 print(my_expensive_function())
 print(my_expensive_function())
 # > this is slow!
-# > hard to find
-# > hard to find
+# > return value
+# > return value
 ```
 
-fiat implements a greedy DAG: if one asset depends on another, it will cause those others to be instantiated first:
+fiat implements a greedy DAG: if one asset depends on another, it will cause those other assets to be materialized first:
 
 ```python
-@asset(registry)
+from fiat import Catalog, MemoryStore, asset
+
+catalog = Catalog()
+store = MemoryStore()
+
+
+@asset(catalog, store)
 def one():
     return 1
 
 
-@asset(registry)
+@asset(catalog, store)
 def two():
     return 2
 
 
-@asset(registry, deps=["one", "two"])
-def three(one, two):
-    return one + two
+@asset(catalog, store, deps=["one", "two"])
+def three():
+    return one() + two()
 ```
 
-You can use `FileStorage` to create persistent artifacts:
+Note that the explicit catalog object makes it clear which assets can depend on each other, and how they find each other.
+
+Use file stores like `PickleStore` and `ParquetStore` to create persistent artifacts:
 
 ```python
-storage = FileStorage("/path/to/my/data")
-registry = AssetRegistry(storage)
+from fiat import Catalog, FileStore, PickleStore, ParquetStore, asset
+import tempfile
+import polars as pl
 
-@asset(format="parquet")
-def my_raw_data() -> pl.DataFrame:
-    # download raw data from the internet
+catalog = Catalog()
+# create a store from the directory name
+with tempfile.TemporaryDirectory() as td:
+    pickle_store = PickleStore(td)
+    parquet_store = ParquetStore(td)
 
-print(my_raw_data())
+    @asset(catalog, pickle_store)
+    def my_object():
+        return None
+
+    @asset(catalog, parquet_store)
+    def my_dataframe() -> pl.DataFrame:
+        return pl.DataFrame({"x": [1, 2, 3]})
+
+    print(my_object())
+    print(my_dataframe())
+    # my_object.pkl and my_dataframe.parquet will appear in the td
 ```
-
-Then `/path/to/my/data/my_raw_data.parquet` will appear!
 
 ## Future directions
 
-- Cloud storage protocols
-- Think harder about the dependency specification. For purely greedy, "it's fresh if it exists" assets, then you don't even need to specify dependencies. There's probably no need to have the dependencies as arguments.
-- Have different ways to express "freshness":
+- Create a "freshness" concept.
+  Have different ways to express "freshness":
     1. "It's fresh if it exists": This is the simplest, what I've done so far.
     1. "It's fresh if it's newer than its dependencies": This is the `make` concept.
-    1. "It's fresh if <some logic>": This is where I want to go. E.g., maybe I want new case data every day, but then all downstream files are `make`-type freshness.
+    1. "It's fresh if <some logic>": This is where I want to go.
+       E.g., maybe I want new case data every day, but then all downstream files are `make`-type freshness.
+- Implement dependencies and the DAG
+- Cloud storage protocols
 
 ## Admins
 

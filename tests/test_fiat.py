@@ -1,12 +1,15 @@
-import fiat
+import polars as pl
+import pytest
+
+from fiat import Catalog, MemoryStore, ParquetStore, PickleStore, asset
 
 
-def test_memory_storage():
-    storage = fiat.MemoryStorage()
-    registry = fiat.AssetRegistry(storage)
+def test_memory_store():
+    catalog = Catalog()
+    store = MemoryStore()
     calls = 0
 
-    @fiat.asset(registry)
+    @asset(catalog, store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -19,14 +22,16 @@ def test_memory_storage():
     f()
     assert calls == 1
 
-    assert storage.assets == {"f": "return value"}
+    # peek inside the store
+    assert store.assets == {"f": "return value"}
 
 
-def test_file_storage(tmp_path):
-    registry = fiat.AssetRegistry(fiat.FileStorage(tmp_path))
+def test_pickle_store(tmp_path):
+    catalog = Catalog()
+    store = PickleStore(tmp_path)
     calls = 0
 
-    @fiat.asset(registry)
+    @asset(catalog, store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -37,5 +42,25 @@ def test_file_storage(tmp_path):
     assert calls == 1
 
     # should read from disk
-    f()
+    assert f() == "return value"
     assert calls == 1
+
+
+def test_parquet_store(tmp_path):
+    catalog = Catalog()
+    store = ParquetStore(tmp_path)
+
+    @asset(catalog, store)
+    def f() -> pl.DataFrame:
+        return pl.DataFrame({"x": [1, 2, 3]})
+
+    obj = f()
+    assert isinstance(obj, pl.DataFrame)
+
+    # should fail if wrong data type
+    @asset(catalog, store)
+    def g() -> str:
+        return "strings can't go in parquets"
+
+    with pytest.raises(ValueError, match="parquet"):
+        g()
