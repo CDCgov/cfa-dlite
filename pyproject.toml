@@ -5,7 +5,9 @@ description = "Minimalist workflow orchestration"
 readme = "README.md"
 authors = [{ name = "Scott Olesen", email = "ulp7@cdc.gov" }]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "returns>=0.29.0",
+]
 
 [project.scripts]
 fiat = "fiat:main"

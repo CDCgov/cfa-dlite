@@ -17,24 +17,20 @@ The simplest store is an in-memory cache:
 from fiat import Asset, Catalog, MemoryStore
 
 
-def my_expensive_function():
+def f():
     print("this is slow!")
-    return "return value"
+    return 1
 
 
-catalog = Catalog(
-    Asset(id="expensive!", fun=my_expensive_function, store=MemoryStore())
-)
+catalog = Catalog()
+catalog.add(Asset(fun=f, store=MemoryStore()))
 
-print(catalog.get("expensive!"))
-print(catalog.get("expensive!"))
+print(catalog.get(f))
+print(catalog.get(f))
 # > this is slow!
-# > return value
-# > return value
+# > 1
+# > 1
 ```
-
-Asset IDs can be any value and default to the function name.
-An asset defined by `Asset(fun=my_function, store=...)` would be accessed with `catalog.get(my_function)`.
 
 fiat has a convenience wrapper around functions:
 
@@ -45,7 +41,7 @@ catalog = Catalog()
 
 
 # this is the wrapper way
-@catalog.as_asset(store=MemoryStore())
+@catalog.asset(MemoryStore())
 def f():
     return "return value"
 
@@ -67,8 +63,11 @@ def g():
 
 
 catalog.add(Asset(fun=g_inner, store=MemoryStore()))
+
 assert g() == "return value"
 ```
+
+Note that we can call `f()` but we need to use the string name `catalog.get("f")`, since this `@catalog.asset` wrapper messes with the function name.
 
 ### Stores
 
@@ -85,22 +84,23 @@ with tempfile.TemporaryDirectory() as td:
     td = Path(td)
     catalog = Catalog()
 
-    @catalog.as_asset(PickleStore(td / "my_object.pkl"))
+    @catalog.asset(PickleStore(td / "my_object.pkl"))
     def my_object():
         return None
 
-    @catalog.as_asset(ParquetStore(td / "my_dataframe.parquet"))
+    @catalog.asset(ParquetStore(td / "my_dataframe.parquet"))
     def my_dataframe() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
-    print(my_object())
-    print(my_dataframe())
+    print(catalog.get(my_object))
+    print(catalog.get(my_dataframe))
     # my_object.pkl and my_dataframe.parquet will appear in the td
 ```
 
 ### Dependencies
 
-*In progress*: fiat implements a greedy DAG: if one asset depends on another, it will cause those other assets to be materialized first:
+An asset function must take no arguments.
+If an asset function calls other asset functions, those assets are materialized in turn:
 
 ```python
 from fiat import Catalog, MemoryStore
@@ -108,26 +108,30 @@ from fiat import Catalog, MemoryStore
 catalog = Catalog()
 
 
-@catalog.as_asset(MemoryStore())
-def one():
+@catalog.asset(MemoryStore())
+def one() -> int:
     return 1
 
 
-@catalog.as_asset(MemoryStore())
-def two():
+@catalog.asset(MemoryStore())
+def two() -> int:
     return 2
 
 
-@catalog.as_asset(MemoryStore())
-def three():
+@catalog.asset(MemoryStore())
+def three() -> int:
     return one() + two()
+
+
+assert catalog.get(three) == 3
 ```
 
 ## Design principles
 
-- Don't require the workflow to be organized differently.
-  You can treat the assets as first-class objects, and use `catalog.get`.
-  Or, you can use `@catalog.as_asset` and keep the rest of the code the same.
+- Explicit over implicit.
+  There is an explicit catalog, rather than global `@dg.asset` calls.
+- Config is an asset.
+- If you delete the `fiat` lines, the code will still run.
 - The catalog creates a namespace orthogonal to the canonical namespace.
   This enables the prior principle.
 - Every asset has a different store.
@@ -143,7 +147,6 @@ def three():
        E.g., maybe I want new case data every day, but then all downstream files are `make`-type freshness.
 - Implement dependencies and the DAG
 - Cloud storage protocols
-- How to deal with wildcards
 
 ## Admins
 

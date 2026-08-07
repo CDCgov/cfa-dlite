@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import pickle
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
-type ID = Any
+from returns.maybe import Maybe, Nothing, Some
+
+type ID = Callable
 
 try:
     import polars as pl
@@ -17,61 +19,25 @@ except ImportError:
     HAS_POLARS = False
 
 
-class DefaultID:
-    pass
-
-
-class Asset:
-    def __init__(
-        self,
-        store: Store,
-        fun: Callable,
-        id: ID = DefaultID,
-        deps: list[str] | None = None,
-    ):
-        self.store = store
-        self.fun = fun
-
-        if ID == DefaultID:
-            self.id = self.fun
-        else:
-            self.id = id
-
-        if deps is None:
-            self.deps = []
-        else:
-            self.deps = deps
-
-    def get(self):
-        outcome = self.store.read()
-        if outcome.exists:
-            obj = outcome.obj
-        else:
-            obj = self.fun()
-            self.store.write(obj)
-
-        return obj
-
-
 @dataclasses.dataclass
-class _StoreOutcome:
-    exists: bool
-    obj: Any = None
+class Asset:
+    fun: Callable
+    store: Store
 
 
 class Store(ABC):
     @abstractmethod
-    def read(self) -> _StoreOutcome:
+    def read(self) -> Maybe:
         pass
 
     @abstractmethod
-    def write(self, obj):
+    def write(self, obj) -> None:
         pass
 
 
 class NullStore(Store):
     def read(self):
-        return _StoreOutcome(exists=False)
+        return Nothing
 
     def write(self, _):
         pass
@@ -79,15 +45,13 @@ class NullStore(Store):
 
 class MemoryStore(Store):
     def __init__(self):
-        self.exists = False
-        self.obj = None
+        self._read_value = Nothing
 
     def read(self):
-        return _StoreOutcome(exists=self.exists, obj=self.obj)
+        return self._read_value
 
     def write(self, obj):
-        self.exists = True
-        self.obj = obj
+        self._read_value = Some(obj)
 
 
 class FileStore(Store):
@@ -96,13 +60,9 @@ class FileStore(Store):
 
     def read(self):
         if self.path.exists():
-            exists = True
-            obj = self._read_file()
+            return Some(self._read_file())
         else:
-            exists = False
-            obj = None
-
-        return _StoreOutcome(exists=exists, obj=obj)
+            return Nothing
 
     @abstractmethod
     def _read_file(self):
@@ -136,39 +96,59 @@ class ParquetStore(FileStore):
 
 
 class Catalog:
-    def __init__(self, *assets: Asset):
+    def __init__(self):
         self.assets: dict[ID, Asset] = {}
-        self.add(*assets)
+        self.aliases = {}
 
-    def add(self, *assets: Asset):
-        for asset in assets:
-            if asset.id in self.assets:
-                raise RuntimeError(f"Duplicated asset ID '{asset.id}'")
+    def add(self, asset: Asset):
+        if len(inspect.signature(asset.fun).parameters) != 0:
+            raise RuntimeError(f"Asset {asset.fun.__name__} has >0 parameters")
 
-            self.assets[asset.id] = asset
+        id = self._fun_id(asset.fun)
+        if id in self.assets:
+            raise RuntimeError(f"Duplicated asset ID '{id}'")
+
+        self.assets[id] = asset
 
     def get(self, id: ID):
-        asset = self.assets[id]
-        return asset.get()
+        # calls to wrapper functions are rerouted to their inner functions
+        if id in self.aliases:
+            id = self.aliases[id]
 
-    def as_asset(
-        self,
-        store: Store,
-        deps: list[ID] | None = None,
-        id: ID = None,
-    ):
+        if id not in self.assets:
+            raise RuntimeError(f"Unknown asset ID {id} among {self.assets.keys()}")
+
+        asset = self.assets[id]
+        match asset.store.read():
+            case Some(obj):
+                return obj
+            case _:
+                obj = self._build(id)
+                asset.store.write(obj)
+                return obj
+
+    def _build(self, id: ID):
+        asset = self.assets[id]
+        return asset.fun()
+
+    def asset(self, store: Store):
         def decorator(fun: Callable):
             """Add this function as an asset to the catalog"""
-            id_ = id or fun
-            deps_ = deps or []
-
-            asset = Asset(store=store, id=id_, fun=fun, deps=deps_)
-            self.add(asset)
+            id = self._fun_id(fun)
+            self.add(Asset(fun=fun, store=store))
+            print(f"{fun=}")
 
             def wrapper():
                 """Return the asset's materialized value"""
-                return self.get(id_)
+                return self.get(id)
 
+            self.aliases[wrapper] = fun
+            print(f"{wrapper=}")
             return wrapper
 
+        print(f"{decorator=}")
         return decorator
+
+    @staticmethod
+    def _fun_id(fun: Callable) -> ID:
+        return fun
