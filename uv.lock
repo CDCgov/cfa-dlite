@@ -15,9 +15,6 @@ wheels = [
 name = "fiat"
 version = "0.1.0"
 source = { editable = "." }
-dependencies = [
-    { name = "returns" },
-]
 
 [package.optional-dependencies]
 polars = [
@@ -30,10 +27,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "polars", marker = "extra == 'polars'", specifier = ">=1.43.2" },
-    { name = "returns", specifier = ">=0.29.0" },
-]
+requires-dist = [{ name = "polars", marker = "extra == 'polars'", specifier = ">=1.43.2" }]
 provides-extras = ["polars"]
 
 [package.metadata.requires-dev]
@@ -117,25 +111,4 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
-]
-
-[[package]]
-name = "returns"
-version = "0.29.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/29/e6/f5ada68dfb47e9c032683813f3cd9a810978d8ce541866d365076215906f/returns-0.29.0.tar.gz", hash = "sha256:fd9831594403229595dc705fee632a9be24a497df10aa3b9b72405d75d54e8ad", size = 106314, upload-time = "2026-08-02T08:36:26.976Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c2/b6/660f9724d574eee210ba89cc8fc2c41a5d960947bcea7d780847ce766e21/returns-0.29.0-py3-none-any.whl", hash = "sha256:db43c06d228f84b3d93c0418313c37c5ee4ecdb7a0f10326c24444f9baaf074c", size = 160951, upload-time = "2026-08-02T08:36:28.291Z" },
-]
-
-[[package]]
-name = "typing-extensions"
-version = "4.16.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3306cebfbda2c520f545d36b5be2c7255cc528bb45d6/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5", size = 113555, upload-time = "2026-07-02T08:40:05.92Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
 ]

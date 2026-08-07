@@ -4,6 +4,14 @@ Minimal workflow orchestration.
 
 "Fiat" is Latin, the third person singular passive present subjunctive of *facio*; that is, "let it be done."
 
+## Why another workflow orchestrator?
+
+- If your workflow takes more than 5 minutes, use dagster.
+- If your workflow takes less than 5 seconds, forget about a DAG or persistence.
+  Run the whole thing every time with a task runner.
+- If you only need existing CLI commands, use `make`.
+- If your workflow takes an intermediate amount of time, and you want persistence, but you don't need sophisticated config management, use fiat.
+
 ## Overview
 
 ### Assets
@@ -23,51 +31,28 @@ def f():
 
 
 catalog = Catalog()
-catalog.add(Asset(fun=f, store=MemoryStore()))
+catalog.add_asset(Asset(fun=f, store=MemoryStore()))
 
-print(catalog.get(f))
-print(catalog.get(f))
-# > this is slow!
-# > 1
-# > 1
-```
+print(catalog.get("f"))
+# -> this is slow!
+# -> 1
+print(catalog.get("f"))
+# -> 1
 
-fiat has a convenience wrapper around functions:
-
-```python
-from fiat import Asset, Catalog, MemoryStore
-
-catalog = Catalog()
+# calling the underlying function will skip over the cache:
+print(f())
+# -> this is slow!
+# -> 1
 
 
-# this is the wrapper way
+# fiat has a convenience wrapper for this:
 @catalog.asset(MemoryStore())
-def f():
-    return "return value"
-
-
-assert f() == "return value"
-
-
-# that's equivalent to:
-# - making a new "inner" function that does the work
-# - making an "outer" function, which has the name of the original function, but
-#   which actually queries the catalog for the "inner" value
-# - adding the "inner" function as an asset
-def g_inner():
-    return "return value"
-
-
 def g():
-    return catalog.get(g_inner)
+    return 2
 
 
-catalog.add(Asset(fun=g_inner, store=MemoryStore()))
-
-assert g() == "return value"
+assert catalog.get("g") == 2
 ```
-
-Note that we can call `f()` but we need to use the string name `catalog.get("f")`, since this `@catalog.asset` wrapper messes with the function name.
 
 ### Stores
 
@@ -86,21 +71,22 @@ with tempfile.TemporaryDirectory() as td:
 
     @catalog.asset(PickleStore(td / "my_object.pkl"))
     def my_object():
-        return None
+        return {"my": "dictionary"}
 
     @catalog.asset(ParquetStore(td / "my_dataframe.parquet"))
     def my_dataframe() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
-    print(catalog.get(my_object))
-    print(catalog.get(my_dataframe))
-    # my_object.pkl and my_dataframe.parquet will appear in the td
+    catalog.get("my_object")
+    catalog.get("my_dataframe")
+    # my_object.pkl and my_dataframe.parquet will appear in the temporary directory
 ```
 
 ### Dependencies
 
-An asset function must take no arguments.
-If an asset function calls other asset functions, those assets are materialized in turn:
+An asset function can take other assets as arguments.
+It cannot take any other kind of argument.
+(This means that any configuration must be treated as an asset.)
 
 ```python
 from fiat import Catalog, MemoryStore
@@ -114,24 +100,34 @@ def one() -> int:
 
 
 @catalog.asset(MemoryStore())
-def two() -> int:
-    return 2
+def two(one) -> int:
+    return one + one
 
 
-@catalog.asset(MemoryStore())
-def three() -> int:
-    return one() + two()
-
-
-assert catalog.get(three) == 3
+assert catalog.get("two") == 2
 ```
+
+### Freshness
+
+When calling `catalog.get("my_asset")`, the catalog will ensure that the asset is "fresh" before returning its value.
+An asset is not fresh (i.e., stale) if:
+
+1. it has not been materialized,
+1. its *mtime* is earlier (i.e., it is older) than any of its *dependencies*, or
+1. any of its *ancestors* (recursive dependencies of dependencies) are stale.
+
+(Corollary: a materialized asset with no dependencies is not stale.)
+
+Each store is responsible for returning the mtime of its materialized asset.
 
 ## Design principles
 
+- Borrow dagster concepts.
+  The asset is different from its materialization.
+  The asset function's signature specifies dependencies.
 - Explicit over implicit.
-  There is an explicit catalog, rather than global `@dg.asset` calls.
+  There is an explicit catalog, rather than global `@dagster.asset` calls.
 - Config is an asset.
-- If you delete the `fiat` lines, the code will still run.
 - The catalog creates a namespace orthogonal to the canonical namespace.
   This enables the prior principle.
 - Every asset has a different store.
@@ -139,13 +135,7 @@ assert catalog.get(three) == 3
 
 ## Future directions
 
-- Create a "freshness" concept.
-  Have different ways to express "freshness":
-    1. "It's fresh if it exists": This is the simplest, what I've done so far.
-    1. "It's fresh if it's newer than its dependencies": This is the `make` concept.
-    1. "It's fresh if <some logic>": This is where I want to go.
-       E.g., maybe I want new case data every day, but then all downstream files are `make`-type freshness.
-- Implement dependencies and the DAG
+- Try this on some repos
 - Cloud storage protocols
 
 ## Admins

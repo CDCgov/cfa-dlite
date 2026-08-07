@@ -15,11 +15,11 @@ def test_memory_store():
         calls += 1
         return "return value"
 
-    assert f() == "return value"
+    assert catalog.get("f") == "return value"
     assert calls == 1
 
     # second call should do nothing
-    f()
+    catalog.get("f")
     assert calls == 1
 
 
@@ -35,12 +35,12 @@ def test_pickle_store(tmp_path):
         calls += 1
         return "return value"
 
-    assert f() == "return value"
+    assert catalog.get("f") == "return value"
     assert (path).exists()
     assert calls == 1
 
     # should read from disk
-    assert f() == "return value"
+    assert catalog.get("f") == "return value"
     assert calls == 1
 
 
@@ -51,8 +51,7 @@ def test_parquet_store(tmp_path):
     def f() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
-    obj = f()
-    assert isinstance(obj, pl.DataFrame)
+    assert isinstance(catalog.get("f"), pl.DataFrame)
 
 
 def test_parquet_store_fail(tmp_path):
@@ -64,7 +63,7 @@ def test_parquet_store_fail(tmp_path):
         return "strings can't go in parquets"
 
     with pytest.raises(ValueError, match="parquet"):
-        g()
+        catalog.get("g")
 
 
 def test_manual_asset():
@@ -76,11 +75,11 @@ def test_manual_asset():
         calls += 1
         return "return value"
 
-    catalog.add(Asset(fun=f, store=MemoryStore()))
+    catalog.add_asset(Asset(fun=f, store=MemoryStore()))
 
-    assert catalog.get(f) == "return value"
+    assert catalog.get("f") == "return value"
     assert calls == 1
-    catalog.get(f)
+    catalog.get("f")
     assert calls == 1
 
 
@@ -90,9 +89,9 @@ def test_get_by_function_manual():
     def f():
         return 1
 
-    catalog.add(Asset(fun=f, store=MemoryStore()))
+    catalog.add_asset(Asset(fun=f, store=MemoryStore()))
 
-    assert catalog.get(f) == 1
+    assert catalog.get("f") == 1
 
 
 def test_get_by_function_wrap():
@@ -102,7 +101,7 @@ def test_get_by_function_wrap():
     def f():
         return 1
 
-    assert catalog.get(f) == 1
+    assert catalog.get("f") == 1
 
 
 def test_asset_deps():
@@ -117,7 +116,31 @@ def test_asset_deps():
         return 2
 
     @catalog.asset(MemoryStore())
-    def three() -> int:
-        return one() + two()
+    def three(one, two) -> int:
+        return one + two
 
-    assert catalog.get(three) == 3
+    assert catalog.get("three") == 3
+
+
+def test_calling_asset_passes_through():
+    catalog = Catalog()
+
+    @catalog.asset(MemoryStore())
+    def one():
+        return 1
+
+    @catalog.asset(MemoryStore())
+    def two(one):
+        return one + one
+
+    assert two(2) == 4
+
+
+def test_postorder_dfs():
+    assert Catalog._postorder_dfs("a", {"a": ["b", "c"], "b": ["d"], "d": ["e"]}) == [
+        "e",
+        "d",
+        "b",
+        "c",
+        "a",
+    ]
