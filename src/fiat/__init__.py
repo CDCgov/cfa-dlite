@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-type ID = str
+type ID = Any
 
 try:
     import polars as pl
@@ -17,14 +17,32 @@ except ImportError:
     HAS_POLARS = False
 
 
-@dataclasses.dataclass
-class Asset:
-    id: str
-    store: Store
-    fun: Callable
-    deps: list[str]
+class DefaultID:
+    pass
 
-    def materialize(self):
+
+class Asset:
+    def __init__(
+        self,
+        store: Store,
+        fun: Callable,
+        id: ID = DefaultID,
+        deps: list[str] | None = None,
+    ):
+        self.store = store
+        self.fun = fun
+
+        if ID == DefaultID:
+            self.id = self.fun
+        else:
+            self.id = id
+
+        if deps is None:
+            self.deps = []
+        else:
+            self.deps = deps
+
+    def get(self):
         outcome = self.store.read()
         if outcome.exists:
             obj = outcome.obj
@@ -118,34 +136,39 @@ class ParquetStore(FileStore):
 
 
 class Catalog:
-    def __init__(self):
+    def __init__(self, *assets: Asset):
         self.assets: dict[ID, Asset] = {}
+        self.add(*assets)
 
-    def asset(
+    def add(self, *assets: Asset):
+        for asset in assets:
+            if asset.id in self.assets:
+                raise RuntimeError(f"Duplicated asset ID '{asset.id}'")
+
+            self.assets[asset.id] = asset
+
+    def get(self, id: ID):
+        asset = self.assets[id]
+        return asset.get()
+
+    def as_asset(
         self,
         store: Store,
-        deps: list[str] | None = None,
-        id: str | None = None,
+        deps: list[ID] | None = None,
+        id: ID = None,
     ):
         def decorator(fun: Callable):
-            """Register this asset"""
-            id_ = id or fun.__name__
+            """Add this function as an asset to the catalog"""
+            id_ = id or fun
             deps_ = deps or []
 
-            if id_ in self.assets:
-                raise RuntimeError(f"Duplicated asset ID '{id}'")
-
             asset = Asset(store=store, id=id_, fun=fun, deps=deps_)
-            self.assets[id_] = asset
+            self.add(asset)
 
             def wrapper():
                 """Return the asset's materialized value"""
-                return self.materialize(id_)
+                return self.get(id_)
 
             return wrapper
 
         return decorator
-
-    def materialize(self, id: ID):
-        asset = self.assets[id]
-        return asset.materialize()

@@ -9,7 +9,7 @@ def test_memory_store():
     store = MemoryStore()
     calls = 0
 
-    @catalog.asset(store)
+    @catalog.as_asset(store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -29,7 +29,7 @@ def test_pickle_store(tmp_path):
     store = PickleStore(path)
     calls = 0
 
-    @catalog.asset(store)
+    @catalog.as_asset(store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -47,7 +47,7 @@ def test_pickle_store(tmp_path):
 def test_parquet_store(tmp_path):
     catalog = Catalog()
 
-    @catalog.asset(ParquetStore(tmp_path / "f.parquet"))
+    @catalog.as_asset(ParquetStore(tmp_path / "f.parquet"))
     def f() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
@@ -59,7 +59,7 @@ def test_parquet_store_fail(tmp_path):
     catalog = Catalog()
 
     # should fail if wrong data type
-    @catalog.asset(ParquetStore(tmp_path / "g.parquet"))
+    @catalog.as_asset(ParquetStore(tmp_path / "g.parquet"))
     def g() -> str:
         return "strings can't go in parquets"
 

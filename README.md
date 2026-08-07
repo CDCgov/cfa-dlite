@@ -6,50 +6,71 @@ Minimal workflow orchestration.
 
 ## Overview
 
-fiat allows you to create a *catalog* of *assets*, each with an associated *store*.
-The simplest store is memory, which implements a simple cache:
+### Assets
+
+fiat allows you to create a *catalog* of *assets*, each with an associated *function* and *store*.
+We *get* the value of an asset by reading from the asset's store or from the asset's function.
+
+The simplest store is an in-memory cache:
 
 ```python
-from fiat import Catalog, MemoryStore
-
-catalog = Catalog()
+from fiat import Asset, Catalog, MemoryStore
 
 
-@catalog.asset(MemoryStore())
 def my_expensive_function():
     print("this is slow!")
     return "return value"
 
 
-print(my_expensive_function())
-print(my_expensive_function())
+catalog = Catalog(
+    Asset(id="expensive!", fun=my_expensive_function, store=MemoryStore())
+)
+
+print(catalog.get("expensive!"))
+print(catalog.get("expensive!"))
 # > this is slow!
 # > return value
 # > return value
 ```
 
-fiat implements a greedy DAG: if one asset depends on another, it will cause those other assets to be materialized first:
+Asset IDs can be any value and default to the function name.
+An asset defined by `Asset(fun=my_function, store=...)` would be accessed with `catalog.get(my_function)`.
+
+fiat has a convenience wrapper around functions:
 
 ```python
-from fiat import Catalog, MemoryStore
+from fiat import Asset, Catalog, MemoryStore
 
 catalog = Catalog()
 
 
-@catalog.asset(MemoryStore())
-def one():
-    return 1
+# this is the wrapper way
+@catalog.as_asset(store=MemoryStore())
+def f():
+    return "return value"
 
 
-@catalog.asset(MemoryStore())
-def two():
-    return 2
+assert f() == "return value"
 
 
-@catalog.asset(MemoryStore(), deps=["one", "two"])
-def three():
-    return one() + two()
+# that's equivalent to:
+# - making a new "inner" function that does the work
+# - making an "outer" function, which has the name of the original function, but
+#   which actually queries the catalog for the "inner" value
+# - adding the "inner" function as an asset
+def g_inner():
+    return "return value"
+
+
+def g():
+    return catalog.get(g_inner)
+
+
+catalog.add(Asset(fun=g_inner, store=MemoryStore()))
+assert g() == "return value"
 ```
+
+### Stores
 
 Use file stores like `PickleStore` and `ParquetStore` to create persistent artifacts:
 
@@ -64,11 +85,11 @@ with tempfile.TemporaryDirectory() as td:
     td = Path(td)
     catalog = Catalog()
 
-    @catalog.asset(PickleStore(td / "my_object.pkl"))
+    @catalog.as_asset(PickleStore(td / "my_object.pkl"))
     def my_object():
         return None
 
-    @catalog.asset(ParquetStore(td / "my_dataframe.parquet"))
+    @catalog.as_asset(ParquetStore(td / "my_dataframe.parquet"))
     def my_dataframe() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
@@ -77,10 +98,36 @@ with tempfile.TemporaryDirectory() as td:
     # my_object.pkl and my_dataframe.parquet will appear in the td
 ```
 
+### Dependencies
+
+*In progress*: fiat implements a greedy DAG: if one asset depends on another, it will cause those other assets to be materialized first:
+
+```python
+from fiat import Catalog, MemoryStore
+
+catalog = Catalog()
+
+
+@catalog.as_asset(MemoryStore())
+def one():
+    return 1
+
+
+@catalog.as_asset(MemoryStore())
+def two():
+    return 2
+
+
+@catalog.as_asset(MemoryStore())
+def three():
+    return one() + two()
+```
+
 ## Design principles
 
-- `fiat` doesn't require the workflow to be organized differently.
-  If you delete all the `fiat` lines, the code will still run.
+- Don't require the workflow to be organized differently.
+  You can treat the assets as first-class objects, and use `catalog.get`.
+  Or, you can use `@catalog.as_asset` and keep the rest of the code the same.
 - The catalog creates a namespace orthogonal to the canonical namespace.
   This enables the prior principle.
 - Every asset has a different store.
