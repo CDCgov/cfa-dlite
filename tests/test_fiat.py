@@ -1,7 +1,15 @@
 import polars as pl
 import pytest
 
-from fiat import Asset, Catalog, MemoryStore, ParquetStore, PickleStore
+from fiat import (
+    Catalog,
+    MemoryStore,
+    ParquetStore,
+    PickleStore,
+    Product,
+    Source,
+    TomlStore,
+)
 
 
 def test_memory_store():
@@ -9,7 +17,7 @@ def test_memory_store():
     store = MemoryStore()
     calls = 0
 
-    @catalog.asset(store)
+    @catalog.as_product(store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -29,7 +37,7 @@ def test_pickle_store(tmp_path):
     store = PickleStore(path)
     calls = 0
 
-    @catalog.asset(store)
+    @catalog.as_product(store)
     def f() -> str:
         nonlocal calls
         calls += 1
@@ -47,7 +55,7 @@ def test_pickle_store(tmp_path):
 def test_parquet_store(tmp_path):
     catalog = Catalog()
 
-    @catalog.asset(ParquetStore(tmp_path / "f.parquet"))
+    @catalog.as_product(ParquetStore(tmp_path / "f.parquet"))
     def f() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
@@ -58,7 +66,7 @@ def test_parquet_store_fail(tmp_path):
     catalog = Catalog()
 
     # should fail if wrong data type
-    @catalog.asset(ParquetStore(tmp_path / "g.parquet"))
+    @catalog.as_product(ParquetStore(tmp_path / "g.parquet"))
     def g() -> str:
         return "strings can't go in parquets"
 
@@ -75,7 +83,7 @@ def test_manual_asset():
         calls += 1
         return "return value"
 
-    catalog.add_asset(Asset(fun=f, store=MemoryStore()))
+    catalog.add_asset(Product(fun=f, store=MemoryStore()))
 
     assert catalog.get("f") == "return value"
     assert calls == 1
@@ -89,7 +97,7 @@ def test_get_by_function_manual():
     def f():
         return 1
 
-    catalog.add_asset(Asset(fun=f, store=MemoryStore()))
+    catalog.add_asset(Product(fun=f, store=MemoryStore()))
 
     assert catalog.get("f") == 1
 
@@ -97,7 +105,7 @@ def test_get_by_function_manual():
 def test_get_by_function_wrap():
     catalog = Catalog()
 
-    @catalog.asset(store=MemoryStore())
+    @catalog.as_product(store=MemoryStore())
     def f():
         return 1
 
@@ -107,15 +115,15 @@ def test_get_by_function_wrap():
 def test_asset_deps():
     catalog = Catalog()
 
-    @catalog.asset(MemoryStore())
+    @catalog.as_product(MemoryStore())
     def one():
         return 1
 
-    @catalog.asset(MemoryStore())
+    @catalog.as_product(MemoryStore())
     def two():
         return 2
 
-    @catalog.asset(MemoryStore())
+    @catalog.as_product(MemoryStore())
     def three(one, two) -> int:
         return one + two
 
@@ -125,11 +133,11 @@ def test_asset_deps():
 def test_calling_asset_passes_through():
     catalog = Catalog()
 
-    @catalog.asset(MemoryStore())
+    @catalog.as_product(MemoryStore())
     def one():
         return 1
 
-    @catalog.asset(MemoryStore())
+    @catalog.as_product(MemoryStore())
     def two(one):
         return one + one
 
@@ -144,3 +152,24 @@ def test_postorder_dfs():
         "c",
         "a",
     ]
+
+
+def test_source(tmp_path):
+    my_config = """
+[parameters]
+beta = 0.5
+gamma = 2.0
+"""
+
+    config_path = tmp_path / "config.toml"
+    with open(config_path, "w") as f:
+        f.write(my_config)
+
+    catalog = Catalog()
+    catalog.add_asset(Source(id="config", store=TomlStore(config_path)))
+
+    @catalog.as_product(MemoryStore())
+    def r0(config):
+        return config["parameters"]["beta"] / config["parameters"]["gamma"]
+
+    assert catalog.get("r0") == 0.25

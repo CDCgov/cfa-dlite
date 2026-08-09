@@ -16,13 +16,19 @@ Minimal workflow orchestration.
 
 ### Assets
 
-fiat allows you to create a *catalog* of *assets*, each with an associated *function* and *store*.
-We *get* the value of an asset by reading from the asset's store or from the asset's function.
+fiat allows you to create a *catalog* of *assets*.
+We *get* the *value* of an asset.
+Assets are either *sources* or *products*.
+A source is read-only: its value can only be read from a *store*.
+A product is read-write.
+If the value is in the store, the value is read.
+If not, the value is computed based on the product's *function*, which can take other assets as input.
+The value is written into the store.
 
 The simplest store is an in-memory cache:
 
 ```python
-from fiat import Asset, Catalog, MemoryStore
+from fiat import Asset, Catalog, MemoryStore, Product
 
 
 def f():
@@ -31,22 +37,20 @@ def f():
 
 
 catalog = Catalog()
-catalog.add_asset(Asset(fun=f, store=MemoryStore()))
+catalog.add_asset(Product(fun=f, store=MemoryStore()))
 
+# on the first call, the value is computed and stored
 print(catalog.get("f"))
 # -> this is slow!
 # -> 1
+
+# on the second call, the value is simple read from the store
 print(catalog.get("f"))
 # -> 1
 
-# calling the underlying function will skip over the cache:
-print(f())
-# -> this is slow!
-# -> 1
 
-
-# fiat has a convenience wrapper for this:
-@catalog.asset(MemoryStore())
+# fiat provides a convenience wrapper for products:
+@catalog.as_product(MemoryStore())
 def g():
     return 2
 
@@ -56,7 +60,7 @@ assert catalog.get("g") == 2
 
 ### Stores
 
-Use file stores like `PickleStore` and `ParquetStore` to create persistent artifacts:
+File stores like `PickleStore` and `ParquetStore` can read and write persistent artifacts:
 
 ```python
 from fiat import Catalog, ParquetStore, PickleStore
@@ -69,11 +73,11 @@ with tempfile.TemporaryDirectory() as td:
     td = Path(td)
     catalog = Catalog()
 
-    @catalog.asset(PickleStore(td / "my_object.pkl"))
+    @catalog.as_product(PickleStore(td / "my_object.pkl"))
     def my_object():
         return {"my": "dictionary"}
 
-    @catalog.asset(ParquetStore(td / "my_dataframe.parquet"))
+    @catalog.as_product(ParquetStore(td / "my_dataframe.parquet"))
     def my_dataframe() -> pl.DataFrame:
         return pl.DataFrame({"x": [1, 2, 3]})
 
@@ -82,11 +86,11 @@ with tempfile.TemporaryDirectory() as td:
     # my_object.pkl and my_dataframe.parquet will appear in the temporary directory
 ```
 
+`TomlStore` is read-only; it can be used for sources but not products.
+
 ### Dependencies
 
-An asset function can take other assets as arguments.
-It cannot take any other kind of argument.
-(This means that any configuration must be treated as an asset.)
+A product function can take other assets as arguments:
 
 ```python
 from fiat import Catalog, MemoryStore
@@ -94,12 +98,12 @@ from fiat import Catalog, MemoryStore
 catalog = Catalog()
 
 
-@catalog.asset(MemoryStore())
+@catalog.as_product(MemoryStore())
 def one() -> int:
     return 1
 
 
-@catalog.asset(MemoryStore())
+@catalog.as_product(MemoryStore())
 def two(one) -> int:
     return one + one
 
@@ -107,18 +111,46 @@ def two(one) -> int:
 assert catalog.get("two") == 2
 ```
 
+A product cannot take anything other than an asset as an argument.
+Therefore, configs must be passed in as sources:
+
+```python
+import tempfile
+from fiat import Catalog, Source, TomlStore
+
+my_config = """
+[parameters]
+beta = 0.5
+gamma = 2.0
+"""
+
+with tempfile.TemporaryDirectory() as td:
+    config_path = Path(td) / "config.toml"
+    with open(config_path, "w") as f:
+        f.write(my_config)
+
+    catalog = Catalog()
+    catalog.add_asset(Source(id="config", store=TomlStore(config_path)))
+
+    @catalog.as_product(MemoryStore())
+    def r0(config):
+        return config["parameters"]["beta"] / config["parameters"]["gamma"]
+
+    assert catalog.get("r0") == 0.25
+```
+
 ### Freshness
 
 When calling `catalog.get("my_asset")`, the catalog will ensure that the asset is "fresh" before returning its value.
-An asset is not fresh (i.e., stale) if:
 
-1. it has not been materialized,
-1. its *mtime* is earlier (i.e., it is older) than any of its *dependencies*, or
-1. any of its *ancestors* (recursive dependencies of dependencies) are stale.
+A source is fresh if it is materialized (e.g., a file exists on disk).
+A product is fresh if:
 
-(Corollary: a materialized asset with no dependencies is not stale.)
+1. it is materialized,
+1. its *mtime* is later (i.e., it is younger) than any of its *dependencies*, or
+1. all its *ancestors* (recursive dependencies of dependencies) are fresh.
 
-Each store is responsible for returning the mtime of its materialized asset.
+Each store is responsible for determining if its assets are materialized and returning their mtimes.
 
 ## Design principles
 
@@ -129,7 +161,6 @@ Each store is responsible for returning the mtime of its materialized asset.
   There is an explicit catalog, rather than global `@dagster.asset` calls.
 - Config is an asset.
 - The catalog creates a namespace orthogonal to the canonical namespace.
-  This enables the prior principle.
 - Every asset has a different store.
   This way an upstream data source might be in the cloud, but downstream ones might be on disk.
 

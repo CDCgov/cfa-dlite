@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 type ID = str
-type _StoreOutcome = tuple[bool] | tuple[bool, Any]
+
 
 try:
     import polars as pl
@@ -45,69 +45,72 @@ class Product:
 
 class Store(ABC):
     @abstractmethod
-    def read(self) -> _StoreOutcome:
+    def is_materialized(self) -> bool:
+        pass
+
+    @abstractmethod
+    def read(self) -> Any:
         pass
 
     @abstractmethod
     def write(self, obj) -> None:
+        """Write the materialized value to the store"""
         pass
 
     @abstractmethod
-    def mtime(self) -> float | None:
+    def mtime(self) -> float:
         pass
-
-
-class NullStore(Store):
-    def read(self):
-        return None
-
-    def write(self, _):
-        pass
-
-    def mtime(self):
-        return None
 
 
 class MemoryStore(Store):
     def __init__(self):
-        self._materialized = False
+        self._is_materialized = False
         self._value = None
         self._mtime = None
 
-    def read(self) -> _StoreOutcome:
-        if self._materialized:
-            return (True, self._value)
-        else:
-            return (False,)
+    def is_materialized(self) -> bool:
+        return self._is_materialized
 
-    def write(self, obj):
-        self._materialized = True
-        self._value = obj
-        self._mtime = time.time()
+    def read(self):
+        if self.is_materialized():
+            return self._value
+        else:
+            raise RuntimeError("Asset not materialized")
 
     def mtime(self):
-        return self._mtime
+        if self.is_materialized():
+            return self._mtime
+        else:
+            raise RuntimeError("Asset not materialized")
+
+    def write(self, obj):
+        self._is_materialized = True
+        self._value = obj
+        self._mtime = time.time()
 
 
 class FileStore(Store):
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def read(self) -> _StoreOutcome:
-        if self.path.exists():
-            return (True, self._read_file())
+    def is_materialized(self) -> bool:
+        return self.path.exists()
+
+    def read(self):
+        if self.is_materialized():
+            return self._read_file()
         else:
-            return (False,)
+            raise RuntimeError("Asset not materialized")
 
     @abstractmethod
-    def _read_file(self):
+    def _read_file(self) -> Any:
         pass
 
-    def mtime(self):
-        if self.path.exists():
+    def mtime(self) -> float:
+        if self.is_materialized():
             return self.path.stat().st_mtime
         else:
-            return None
+            raise RuntimeError("Asset not materialized")
 
 
 class PickleStore(FileStore):
@@ -121,7 +124,9 @@ class PickleStore(FileStore):
 
 
 class ParquetStore(FileStore):
-    def __post_init__(self):
+    def __init__(self, path: str | Path):
+        super().__init__(path=path)
+
         if not HAS_POLARS:
             raise ImportError("fiat[polars] is required for ParquetStore")
 
@@ -142,7 +147,7 @@ class TomlStore(FileStore):
             return tomllib.load(f)
 
     def write(self, _):
-        raise NotImplementedError()
+        raise NotImplementedError("Writing toml is not implemented")
 
 
 class Catalog:
@@ -151,25 +156,25 @@ class Catalog:
         self.aliases = {}
 
     def _get_asset(self, id: ID):
-        """Get the asset entry"""
+        """Get the asset, not its value"""
         if id not in self.assets:
             raise RuntimeError(f"Unknown asset ID {id} among {self.assets.keys()}")
 
         return self.assets[id]
 
-    def add(self, asset: Asset):
-        """Add an Asset to the catalog"""
+    def add_asset(self, asset: Asset):
+        """Add an asset to the catalog"""
         if asset.id in self.assets:
             raise RuntimeError(f"Duplicated asset ID '{asset.id}'")
 
         self.assets[asset.id] = asset
 
-    def product(self, store: Store):
+    def as_product(self, store: Store):
         """Product function wrapper"""
 
         def decorator(fun: Callable):
             """Add a Product to the catalog, using this function"""
-            self.add(Product(fun=fun, store=store))
+            self.add_asset(Product(fun=fun, store=store))
 
             # pass through the original function
             def wrapper(*args, **kwargs):
@@ -179,70 +184,87 @@ class Catalog:
 
         return decorator
 
-    def get(self, id: ID):
+    def get(self, id: ID) -> Any:
         """Get the value of an asset"""
         asset = self._get_asset(id)
 
         if isinstance(asset, Product):
-            self._ensure_fresh(product)
+            self._ensure_fresh(asset)
 
-        value = asset.store.read()
+        return self._read_materialized_value(asset)
 
-        if not (len(value) == 2 and value[0]):
-            raise RuntimeError(f"Asset {id} was not materialized in freshness check")
+    def _read_materialized_value(self, asset: Asset) -> Any:
+        if asset.store.is_materialized():
+            return asset.store.read()
+        else:
+            raise RuntimeError(f"Asset {asset.id} is not materialized")
 
-        return value[1]
-
-    def _ensure_fresh(self, product: Product):
+    def _ensure_fresh(self, product: Product) -> None:
         """Ensure `id` and its ancestors are fresh"""
         # map each asset to its dependencies
-        deps_map = {asset.id: asset.deps for id, asset in self.assets.items()}
-        # get an ordered list of ancestors for the target asset
+        deps_map = {asset.id: asset.deps for asset in self.assets.values()}
+
+        # get an ordered list of ancestors for the target product
         ancestors = self._postorder_dfs(root=product.id, deps_map=deps_map)
+
+        # ensure all ancestors are known
+        if missing_ids := set(ancestors) - set(self.assets.keys()):
+            raise RuntimeError(
+                f"Product {product.id} has ancestors {missing_ids} that"
+                " are not among cataloged assets"
+            )
 
         for ancestor in ancestors:
             asset = self._get_asset(ancestor)
-            if self._is_stale(asset):
-                self._materialize(product.id)
 
-    def _is_stale(self, asset: Asset) -> bool:
-        """Asset is not materialized, or it is older than a dependency"""
-        mtime = asset.store.mtime()
+            if isinstance(asset, Source) and asset.store.is_materialized():
+                pass
+            elif isinstance(asset, Source):
+                raise RuntimeError(f"Source {asset.id} is not materialized")
+            elif isinstance(asset, Product) and self._is_fresh(asset):
+                pass
+            elif isinstance(asset, Product):
+                self._materialize(asset)
+            else:
+                raise RuntimeError(f"Unexpected state: {asset.id}")
 
-        if mtime is None:
-            return True
-        elif mtime is not None and len(asset.deps) == 0:
+    def _is_fresh(self, asset: Asset) -> bool:
+        if not asset.store.is_materialized():
+            # not materialized -> stale
             return False
-        elif mtime is not None and len(asset.deps) > 0:
-            dep_mtimes = [self._get_asset(dep).store.mtime() for dep in asset.deps]
-            if any(dep_mtime is None for dep_mtime in dep_mtimes):
+        else:
+            # _is_fresh is called only via postorder DFS traversal, so this assets
+            # dependencies should already be materialized
+            if not asset.store.is_materialized():
+                raise RuntimeError(f"Asset {asset.id} is not materialized")
+
+            deps = [self._get_asset(dep) for dep in asset.deps]
+
+            if non_mat_deps := [dep for dep in deps if not dep.store.is_materialized()]:
                 raise RuntimeError(
-                    f"Asset {asset.id} has un-materialized dependencies while ensuring freshness"
+                    f"Asset {asset.id} has un-materialized deps {non_mat_deps}"
                 )
 
-            max_dep_mtime = self._max_no_nones(dep_mtimes)
+            if len(deps) == 0:
+                return True
+            else:
+                mtime = asset.store.mtime()
+                dep_mtimes = [dep.store.mtime() for dep in deps]
 
-            return mtime < max_dep_mtime
-        else:
-            raise RuntimeError(f"Bad state: {mtime=} and {asset.deps=}")
+                if any(dep_mtime is None for dep_mtime in dep_mtimes):
+                    raise RuntimeError(
+                        f"Asset {asset.id} has deps with un-materialized mtimes"
+                    )
+
+                return mtime > max(dep_mtimes)
 
     def _materialize(self, product: Product):
         """Compute the Product's value"""
-        if missing_ids := set(product.deps) - set(self.assets.keys()):
-            raise RuntimeError(
-                f"Product {id} requires assets {missing_ids},"
-                " but these are not in the catalog"
-            )
-
-        args = [self.get(id) for id in product.deps]
-        assert all(arg is not None for arg in args)
+        args = [
+            self._read_materialized_value(self._get_asset(id)) for id in product.deps
+        ]
         value = product.fun(*args)
         product.store.write(value)
-
-    @staticmethod
-    def _max_no_nones(lst: list[float | None]) -> float:
-        assert all(isinstance(x, float) for x in lst)
-        return max([x for x in lst if x is not None])
 
     @staticmethod
     def _postorder_dfs(root: str, deps_map: dict[str, list[str]]):
