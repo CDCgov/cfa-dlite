@@ -98,12 +98,13 @@ class FileStore(Store):
 
     def read(self):
         if self.is_materialized():
-            return self._read_file()
+            return self._read_file(self.path)
         else:
             raise RuntimeError("Asset not materialized")
 
+    @staticmethod
     @abstractmethod
-    def _read_file(self) -> Any:
+    def _read_file(path: Path) -> Any:
         pass
 
     def mtime(self) -> float:
@@ -114,8 +115,9 @@ class FileStore(Store):
 
 
 class PickleStore(FileStore):
-    def _read_file(self):
-        with open(self.path, "rb") as f:
+    @staticmethod
+    def _read_file(path: Path):
+        with open(path, "rb") as f:
             return pickle.load(f)
 
     def write(self, obj):
@@ -130,8 +132,9 @@ class ParquetStore(FileStore):
         if not HAS_POLARS:
             raise ImportError("fiat[polars] is required for ParquetStore")
 
-    def _read_file(self):
-        return pl.read_parquet(self.path)
+    @staticmethod
+    def _read_file(path: Path):
+        return pl.read_parquet(path)
 
     def write(self, obj: pl.DataFrame):
         if not isinstance(obj, pl.DataFrame):
@@ -142,8 +145,9 @@ class ParquetStore(FileStore):
 
 
 class TomlStore(FileStore):
-    def _read_file(self):
-        with open(self.path, "rb") as f:
+    @staticmethod
+    def _read_file(path: Path):
+        with open(path, "rb") as f:
             return tomllib.load(f)
 
     def write(self, _):
