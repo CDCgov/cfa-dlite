@@ -3,13 +3,14 @@ from __future__ import annotations
 import inspect
 import pickle
 import time
+import tomllib
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 type ID = str
-type StoreOutcome = tuple[bool] | tuple[bool, Any]
+type _StoreOutcome = tuple[bool] | tuple[bool, Any]
 
 try:
     import polars as pl
@@ -18,8 +19,17 @@ try:
 except ImportError:
     HAS_POLARS = False
 
+type Asset = Source | Product
 
-class Asset:
+
+class Source:
+    def __init__(self, store: Store, id: ID):
+        self.store = store
+        self.id = id
+        self.deps = []
+
+
+class Product:
     def __init__(self, fun: Callable, store: Store, id: ID | None = None):
         self.fun = fun
         self.store = store
@@ -35,7 +45,7 @@ class Asset:
 
 class Store(ABC):
     @abstractmethod
-    def read(self) -> StoreOutcome:
+    def read(self) -> _StoreOutcome:
         pass
 
     @abstractmethod
@@ -64,7 +74,7 @@ class MemoryStore(Store):
         self._value = None
         self._mtime = None
 
-    def read(self) -> StoreOutcome:
+    def read(self) -> _StoreOutcome:
         if self._materialized:
             return (True, self._value)
         else:
@@ -83,7 +93,7 @@ class FileStore(Store):
     def __init__(self, path: str | Path):
         self.path = Path(path)
 
-    def read(self) -> StoreOutcome:
+    def read(self) -> _StoreOutcome:
         if self.path.exists():
             return (True, self._read_file())
         else:
@@ -126,6 +136,15 @@ class ParquetStore(FileStore):
         obj.write_parquet(self.path)
 
 
+class TomlStore(FileStore):
+    def _read_file(self):
+        with open(self.path, "rb") as f:
+            return tomllib.load(f)
+
+    def write(self, _):
+        raise NotImplementedError()
+
+
 class Catalog:
     def __init__(self):
         self.assets: dict[ID, Asset] = {}
@@ -138,20 +157,19 @@ class Catalog:
 
         return self.assets[id]
 
-    def add_asset(self, asset: Asset):
+    def add(self, asset: Asset):
         """Add an Asset to the catalog"""
         if asset.id in self.assets:
             raise RuntimeError(f"Duplicated asset ID '{asset.id}'")
 
         self.assets[asset.id] = asset
 
-    def asset(self, store: Store):
-        """Asset function wrapper"""
+    def product(self, store: Store):
+        """Product function wrapper"""
 
         def decorator(fun: Callable):
-            """Add this function as an asset to the catalog"""
-            asset = Asset(fun=fun, store=store)
-            self.add_asset(asset)
+            """Add a Product to the catalog, using this function"""
+            self.add(Product(fun=fun, store=store))
 
             # pass through the original function
             def wrapper(*args, **kwargs):
@@ -163,25 +181,29 @@ class Catalog:
 
     def get(self, id: ID):
         """Get the value of an asset"""
-        self._ensure_fresh(id)
-        value = self._get_asset(id).store.read()
+        asset = self._get_asset(id)
+
+        if isinstance(asset, Product):
+            self._ensure_fresh(product)
+
+        value = asset.store.read()
 
         if not (len(value) == 2 and value[0]):
             raise RuntimeError(f"Asset {id} was not materialized in freshness check")
 
         return value[1]
 
-    def _ensure_fresh(self, id: ID):
+    def _ensure_fresh(self, product: Product):
         """Ensure `id` and its ancestors are fresh"""
         # map each asset to its dependencies
         deps_map = {asset.id: asset.deps for id, asset in self.assets.items()}
         # get an ordered list of ancestors for the target asset
-        ancestors = self._postorder_dfs(root=id, deps_map=deps_map)
+        ancestors = self._postorder_dfs(root=product.id, deps_map=deps_map)
 
         for ancestor in ancestors:
             asset = self._get_asset(ancestor)
             if self._is_stale(asset):
-                self._materialize(asset.id)
+                self._materialize(product.id)
 
     def _is_stale(self, asset: Asset) -> bool:
         """Asset is not materialized, or it is older than a dependency"""
@@ -204,20 +226,18 @@ class Catalog:
         else:
             raise RuntimeError(f"Bad state: {mtime=} and {asset.deps=}")
 
-    def _materialize(self, id: ID):
-        """Compute the asset's value"""
-        asset = self._get_asset(id)
-
-        if missing_ids := set(asset.deps) - set(self.assets.keys()):
+    def _materialize(self, product: Product):
+        """Compute the Product's value"""
+        if missing_ids := set(product.deps) - set(self.assets.keys()):
             raise RuntimeError(
-                f"Asset {id} requires assets {missing_ids},"
+                f"Product {id} requires assets {missing_ids},"
                 " but these are not in the catalog"
             )
 
-        args = [self.get(id) for id in asset.deps]
+        args = [self.get(id) for id in product.deps]
         assert all(arg is not None for arg in args)
-        value = asset.fun(*args)
-        asset.store.write(value)
+        value = product.fun(*args)
+        product.store.write(value)
 
     @staticmethod
     def _max_no_nones(lst: list[float | None]) -> float:
