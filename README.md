@@ -14,6 +14,8 @@ Minimal workflow orchestration.
 
 ## Overview
 
+See the tests for vignettes.
+
 ### Assets
 
 fiat allows you to create a *catalog* of *assets*.
@@ -25,119 +27,17 @@ If the value is in the store, the value is read.
 If not, the value is computed based on the product's *function*, which can take other assets as input.
 The value is written into the store.
 
-The simplest store is an in-memory cache:
-
-```python
-from fiat import Asset, Catalog, MemoryStore, Product
-
-
-def f():
-    print("this is slow!")
-    return 1
-
-
-catalog = Catalog()
-catalog.add_asset(Product(fun=f, store=MemoryStore()))
-
-# on the first call, the value is computed and stored
-print(catalog.get("f"))
-# -> this is slow!
-# -> 1
-
-# on the second call, the value is simple read from the store
-print(catalog.get("f"))
-# -> 1
-
-
-# fiat provides a convenience wrapper for products:
-@catalog.as_product(MemoryStore())
-def g():
-    return 2
-
-
-assert catalog.get("g") == 2
-```
-
 ### Stores
 
 File stores like `PickleStore` and `ParquetStore` can read and write persistent artifacts:
-
-```python
-from fiat import Catalog, ParquetStore, PickleStore
-import tempfile
-import polars as pl
-from pathlib import Path
-
-# create a store from the directory name
-with tempfile.TemporaryDirectory() as td:
-    td = Path(td)
-    catalog = Catalog()
-
-    @catalog.as_product(PickleStore(td / "my_object.pkl"))
-    def my_object():
-        return {"my": "dictionary"}
-
-    @catalog.as_product(ParquetStore(td / "my_dataframe.parquet"))
-    def my_dataframe() -> pl.DataFrame:
-        return pl.DataFrame({"x": [1, 2, 3]})
-
-    catalog.get("my_object")
-    catalog.get("my_dataframe")
-    # my_object.pkl and my_dataframe.parquet will appear in the temporary directory
-```
 
 `TomlStore` is read-only; it can be used for sources but not products.
 
 ### Dependencies
 
-A product function can take other assets as arguments:
-
-```python
-from fiat import Catalog, MemoryStore
-
-catalog = Catalog()
-
-
-@catalog.as_product(MemoryStore())
-def one() -> int:
-    return 1
-
-
-@catalog.as_product(MemoryStore())
-def two(one) -> int:
-    return one + one
-
-
-assert catalog.get("two") == 2
-```
-
+A product function can take other assets as arguments.
 A product cannot take anything other than an asset as an argument.
-Therefore, configs must be passed in as sources:
-
-```python
-import tempfile
-from fiat import Catalog, Source, TomlStore
-
-my_config = """
-[parameters]
-beta = 0.5
-gamma = 2.0
-"""
-
-with tempfile.TemporaryDirectory() as td:
-    config_path = Path(td) / "config.toml"
-    with open(config_path, "w") as f:
-        f.write(my_config)
-
-    catalog = Catalog()
-    catalog.add_asset(Source(id="config", store=TomlStore(config_path)))
-
-    @catalog.as_product(MemoryStore())
-    def r0(config):
-        return config["parameters"]["beta"] / config["parameters"]["gamma"]
-
-    assert catalog.get("r0") == 0.25
-```
+Therefore, configs must be passed in as sources.
 
 ### Freshness
 
@@ -163,11 +63,6 @@ Each store is responsible for determining if its assets are materialized and ret
 - The catalog creates a namespace orthogonal to the canonical namespace.
 - Every asset has a different store.
   This way an upstream data source might be in the cloud, but downstream ones might be on disk.
-
-## Future directions
-
-- Try this on some repos
-- Cloud storage protocols
 
 ## Admins
 

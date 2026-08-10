@@ -23,9 +23,9 @@ type Asset = Source | Product
 
 
 class Source:
-    def __init__(self, store: Store, id: ID):
-        self.store = store
+    def __init__(self, id: ID, store: Store):
         self.id = id
+        self.store = store
         self.deps = []
 
 

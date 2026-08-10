@@ -13,22 +13,32 @@ from fiat import (
 
 
 def test_memory_store():
-    catalog = Catalog()
-    store = MemoryStore()
     calls = 0
 
-    @catalog.as_product(store)
     def f() -> str:
         nonlocal calls
         calls += 1
-        return "return value"
+        return "return"
 
-    assert catalog.get("f") == "return value"
+    catalog = Catalog()
+    catalog.add_asset(Product(fun=f, store=MemoryStore()))
+
+    assert catalog.get("f") == "return"
     assert calls == 1
 
-    # second call should do nothing
+    # second call should not run the computation
     catalog.get("f")
     assert calls == 1
+
+
+def test_as_product():
+    catalog = Catalog()
+
+    @catalog.as_product(store=MemoryStore())
+    def f() -> str:
+        return "return"
+
+    assert catalog.get("f") == "return"
 
 
 def test_pickle_store(tmp_path):
@@ -41,14 +51,15 @@ def test_pickle_store(tmp_path):
     def f() -> str:
         nonlocal calls
         calls += 1
-        return "return value"
+        return "return"
 
-    assert catalog.get("f") == "return value"
-    assert (path).exists()
+    # should compute and write to disk
+    assert catalog.get("f") == "return"
     assert calls == 1
+    assert path.exists()
 
     # should read from disk
-    assert catalog.get("f") == "return value"
+    assert catalog.get("f") == "return"
     assert calls == 1
 
 
@@ -74,74 +85,33 @@ def test_parquet_store_fail(tmp_path):
         catalog.get("g")
 
 
-def test_manual_asset():
-    catalog = Catalog()
-    calls = 0
-
-    def f() -> str:
-        nonlocal calls
-        calls += 1
-        return "return value"
-
-    catalog.add_asset(Product(fun=f, store=MemoryStore()))
-
-    assert catalog.get("f") == "return value"
-    assert calls == 1
-    catalog.get("f")
-    assert calls == 1
-
-
-def test_get_by_function_manual():
-    catalog = Catalog()
-
-    def f():
-        return 1
-
-    catalog.add_asset(Product(fun=f, store=MemoryStore()))
-
-    assert catalog.get("f") == 1
-
-
-def test_get_by_function_wrap():
+def test_asset_can_call_other_assets():
     catalog = Catalog()
 
     @catalog.as_product(store=MemoryStore())
-    def f():
+    def one() -> int:
         return 1
 
-    assert catalog.get("f") == 1
-
-
-def test_asset_deps():
-    catalog = Catalog()
-
-    @catalog.as_product(MemoryStore())
-    def one():
-        return 1
-
-    @catalog.as_product(MemoryStore())
-    def two():
-        return 2
-
-    @catalog.as_product(MemoryStore())
-    def three(one, two) -> int:
-        return one + two
-
-    assert catalog.get("three") == 3
-
-
-def test_calling_asset_passes_through():
-    catalog = Catalog()
-
-    @catalog.as_product(MemoryStore())
-    def one():
-        return 1
-
-    @catalog.as_product(MemoryStore())
-    def two(one):
+    @catalog.as_product(store=MemoryStore())
+    def two(one: int) -> int:
         return one + one
 
-    assert two(2) == 4
+    # asset calls other assets
+    assert catalog.get("two") == 2
+
+
+def test_product_functions_pass_through():
+    catalog = Catalog()
+
+    @catalog.as_product(store=MemoryStore())
+    def add(x, y):
+        return x + y
+
+    assert add(1, 2) == 3
+
+    # asset call fails because of missing dependencies
+    with pytest.raises(RuntimeError, match="not among cataloged assets"):
+        catalog.get("add")
 
 
 def test_postorder_dfs():
