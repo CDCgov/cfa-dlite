@@ -130,7 +130,7 @@ class ParquetStore(FileStore):
         super().__init__(path=path)
 
         if not HAS_POLARS:
-            raise ImportError("fiat[polars] is required for ParquetStore")
+            raise ImportError("dlite[polars] is required for ParquetStore")
 
     @staticmethod
     def _read_file(path: Path):
@@ -157,7 +157,6 @@ class TomlStore(FileStore):
 class Catalog:
     def __init__(self):
         self.assets: dict[ID, Asset] = {}
-        self.aliases = {}
 
     def _get_asset(self, id: ID):
         """Get the asset, not its value"""
@@ -237,11 +236,6 @@ class Catalog:
             # not materialized -> stale
             return False
         else:
-            # _is_fresh is called only via postorder DFS traversal, so this assets
-            # dependencies should already be materialized
-            if not asset.store.is_materialized():
-                raise RuntimeError(f"Asset {asset.id} is not materialized")
-
             deps = [self._get_asset(dep) for dep in asset.deps]
 
             if non_mat_deps := [dep for dep in deps if not dep.store.is_materialized()]:
@@ -292,7 +286,7 @@ class Catalog:
             elif state[node] == "done":
                 return
             else:
-                RuntimeError(f"Node {node} has bad state {state[node]}")
+                raise RuntimeError(f"Node {node} has bad state {state[node]}")
 
         visit(root)
         return order

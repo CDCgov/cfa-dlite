@@ -28,8 +28,7 @@ The value is written into the store.
 
 ### Stores
 
-File stores like `PickleStore` and `ParquetStore` can read and write persistent artifacts:
-
+File stores like `PickleStore` and `ParquetStore` can read and write persistent artifacts.
 `TomlStore` is read-only; it can be used for sources but not products.
 
 ### Dependencies

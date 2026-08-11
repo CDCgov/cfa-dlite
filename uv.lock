@@ -23,6 +23,7 @@ polars = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "polars" },
     { name = "pytest" },
 ]
 
@@ -31,7 +32,10 @@ requires-dist = [{ name = "polars", marker = "extra == 'polars'", specifier = ">
 provides-extras = ["polars"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+dev = [
+    { name = "polars", specifier = ">=1.43.2" },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
 
 [[package]]
 name = "iniconfig"
