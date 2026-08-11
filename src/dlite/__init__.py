@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import pickle
 import time
 import tomllib
@@ -127,6 +128,18 @@ class PickleStore(FileStore):
     def _write_file(obj, path: Path):
         with open(path, "wb") as f:
             pickle.dump(obj, f)
+
+
+class JsonStore(FileStore):
+    @staticmethod
+    def _read_file(path: Path):
+        with open(path) as f:
+            return json.load(f)
+
+    @staticmethod
+    def _write_file(obj: Any, path: Path):
+        with open(path, "w") as f:
+            json.dump(obj, f)
 
 
 class PolarsStore(FileStore):

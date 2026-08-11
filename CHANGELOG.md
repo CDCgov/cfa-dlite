@@ -9,7 +9,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- TomlStore, CsvStore
+- CsvStore, JsonStore, TomlStore
 
 ### Changed
 

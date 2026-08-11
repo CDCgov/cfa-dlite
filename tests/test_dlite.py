@@ -3,6 +3,7 @@ import pytest
 
 from dlite import (
     Catalog,
+    JsonStore,
     MemoryStore,
     ParquetStore,
     PickleStore,
@@ -83,6 +84,17 @@ def test_parquet_store_fail(tmp_path):
 
     with pytest.raises(ValueError, match="ParquetStore"):
         catalog.get("g")
+
+
+def test_json_store(tmp_path):
+    catalog = Catalog()
+
+    @catalog.as_product(JsonStore(tmp_path / "a.json"))
+    def f():
+        return {1: 2}
+
+    catalog.get("f")
+    catalog.get("f")
 
 
 def test_asset_can_call_other_assets():
