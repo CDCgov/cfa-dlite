@@ -45,21 +45,18 @@ class Product:
 
 class Store(ABC):
     @abstractmethod
-    def is_materialized(self) -> bool:
-        pass
+    def is_materialized(self) -> bool: ...
 
     @abstractmethod
-    def read(self) -> Any:
-        pass
+    def read(self) -> Any: ...
 
     @abstractmethod
     def write(self, obj) -> None:
         """Write the materialized value to the store"""
-        pass
+        ...
 
     @abstractmethod
-    def mtime(self) -> float:
-        pass
+    def mtime(self) -> float: ...
 
 
 class MemoryStore(Store):
@@ -102,16 +99,22 @@ class FileStore(Store):
         else:
             raise RuntimeError("Asset not materialized")
 
-    @staticmethod
-    @abstractmethod
-    def _read_file(path: Path) -> Any:
-        pass
-
     def mtime(self) -> float:
         if self.is_materialized():
             return self.path.stat().st_mtime
         else:
             raise RuntimeError("Asset not materialized")
+
+    def write(self, obj):
+        self._write_file(obj=obj, path=self.path)
+
+    @staticmethod
+    @abstractmethod
+    def _read_file(path: Path) -> Any: ...
+
+    @staticmethod
+    @abstractmethod
+    def _write_file(obj: Any, path: Path): ...
 
 
 class PickleStore(FileStore):
@@ -120,28 +123,46 @@ class PickleStore(FileStore):
         with open(path, "rb") as f:
             return pickle.load(f)
 
-    def write(self, obj):
-        with open(self.path, "wb") as f:
+    @staticmethod
+    def _write_file(obj, path: Path):
+        with open(path, "wb") as f:
             pickle.dump(obj, f)
 
 
-class ParquetStore(FileStore):
+class PolarsStore(FileStore):
     def __init__(self, path: str | Path):
-        super().__init__(path=path)
-
         if not HAS_POLARS:
-            raise ImportError("dlite[polars] is required for ParquetStore")
+            raise ImportError(f"dlite[polars] is required for {type(self)}")
 
-    @staticmethod
-    def _read_file(path: Path):
-        return pl.read_parquet(path)
+        super().__init__(path=path)
 
     def write(self, obj: pl.DataFrame):
         if not isinstance(obj, pl.DataFrame):
             raise ValueError(
-                f"Cannot write '{obj}' of type {type(obj)} to parquet store"
+                f"Cannot write '{obj}' of type {type(obj)} to {type(self)}"
             )
-        obj.write_parquet(self.path)
+
+        super().write(obj=obj)
+
+
+class ParquetStore(PolarsStore):
+    @staticmethod
+    def _read_file(path: Path):
+        return pl.read_parquet(path)
+
+    @staticmethod
+    def _write_file(obj: pl.DataFrame, path: Path):
+        obj.write_parquet(path)
+
+
+class CsvStore(PolarsStore):
+    @staticmethod
+    def _read_file(path: Path):
+        return pl.read_csv(path)
+
+    @staticmethod
+    def _write_file(obj: pl.DataFrame, path: Path):
+        obj.write_csv(path)
 
 
 class TomlStore(FileStore):
@@ -150,7 +171,8 @@ class TomlStore(FileStore):
         with open(path, "rb") as f:
             return tomllib.load(f)
 
-    def write(self, _):
+    @staticmethod
+    def _write_file(_obj, _path):
         raise NotImplementedError("Writing toml is not implemented")
 
 

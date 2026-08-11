@@ -81,7 +81,7 @@ def test_parquet_store_fail(tmp_path):
     def g() -> str:
         return "strings can't go in parquets"
 
-    with pytest.raises(ValueError, match="parquet"):
+    with pytest.raises(ValueError, match="ParquetStore"):
         catalog.get("g")
 
 
