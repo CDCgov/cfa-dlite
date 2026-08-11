@@ -1,7 +1,7 @@
 import polars as pl
 import pytest
 
-from fiat import (
+from dlite import (
     Catalog,
     MemoryStore,
     ParquetStore,

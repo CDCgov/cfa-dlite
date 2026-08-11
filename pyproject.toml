@@ -1,5 +1,5 @@
 [project]
-name = "fiat"
+name = "dlite"
 version = "0.1.0"
 description = "Minimalist workflow orchestration"
 readme = "README.md"
@@ -8,7 +8,7 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-fiat = "fiat:main"
+dlite = "dlite:main"
 
 [project.optional-dependencies]
 polars = ["polars>=1.43.2"]

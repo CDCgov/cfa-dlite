@@ -13,6 +13,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Changed name to `dlite`
 - Assets are now Sources or Products
 
 ## [0.1.0]
@@ -21,4 +22,4 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Catalog, assets, stores, and freshness
 
-[0.1.0]: https://github.com/cdcent/fiat/releases/tag/v0.1.0
+[0.1.0]: https://github.com/cdcent/dlite/releases/tag/v0.1.0

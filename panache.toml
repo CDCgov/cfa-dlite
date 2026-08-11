@@ -1,5 +1,4 @@
 flavor = "gfm"
-extend-exclude = [".github/"]
 
 [format]
 wrap = "sentence"

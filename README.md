@@ -1,8 +1,7 @@
-# fiat
+# dlite
 
-Minimal workflow orchestration.
-
-"Fiat" is Latin, the third person singular passive present subjunctive of *facio*; that is, "let it be done."
+dlite does **minimalist workflow orchestration**.
+It's DAGs, but light.
 
 ## Why another workflow orchestrator?
 
@@ -10,7 +9,7 @@ Minimal workflow orchestration.
 - If your workflow takes less than 5 seconds, forget about a DAG or persistence.
   Run the whole thing every time with a task runner.
 - If you only need existing CLI commands, use `make`.
-- If your workflow takes an intermediate amount of time, and you want persistence, but you don't need sophisticated config management, use fiat.
+- If your workflow takes an intermediate amount of time, and you want persistence, but you don't need sophisticated config management, use dlite.
 
 ## Overview
 
@@ -18,7 +17,7 @@ See the tests for vignettes.
 
 ### Assets
 
-fiat allows you to create a *catalog* of *assets*.
+dlite allows you to create a *catalog* of *assets*.
 We *get* the *value* of an asset.
 Assets are either *sources* or *products*.
 A source is read-only: its value can only be read from a *store*.
